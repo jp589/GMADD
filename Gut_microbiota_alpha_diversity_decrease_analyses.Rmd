@@ -1,0 +1,1207 @@
+---
+title: "Gut microbiome alpha diversity decreases in relation to body weight, antibiotic exposure, and infection with multidrug-resistant organisms"
+author: "Jonathan Panzer"
+date: "3/9/23"
+output:
+  html_document:
+    keep_md: true
+    toc: true
+    toc_float: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Table of Contents
+
+***
+
+1. [Introduction](#Introduction)
+2. [DADA2 Processing](#DADA2_processing)
+3. [Setup](#Setup)
+    * [Installation](#Installation)
+    * [Package Loading](#Package_loading)
+4. [Function Definitions](#Function_definitions)
+5. [Data Processing](#Data_processing)
+    * [DECONTAM Processing](#DECONTAM_processing)
+    * [Normalization](#Normalization)
+    * [MDRO Infection Assessment](#MDRO_setup)
+    * [Cohort Body Weight Distribution](#Weight_distribution)
+6. [Alpha diversity](#Alpha_diversity)
+    * [Exposure to Antibiotics](#Antibiotic_exposure)
+    * [Body Weight](#Body_weight)
+    * [Number of MDROs](#Number_of_MDROs)
+    * [MDRO Status](#MDRO_status)
+    * [MDRO *E. coli* infection](#MDRO_E_coli)
+    * [Antibiotic Classes](#Antibiotic_classes)
+7. [LEfSe](#LEfSe)
+8. [Cohort Demographics](#Cohort_demographics)
+
+***
+
+## Introduction {#Introduction}
+
+This GMADD github repository contains all code used to process and analyze data and metadata associated with the brief report published in the journal *Open Forum Infectious Diseases* (DOI:___). The following abstract summarizes the results of the brief report:
+
+Abstract:
+16S rRNA gene sequencing of 45 fecal samples revealed that subjects with multiple multidrug-resistant organisms (MDROs), subjects weighing greater than 80kg infected with MDRO E. coli, and subjects weighing less than 80kg with exposure to vancomycin and carbapenem antibiotics during hospitalization had significantly decreased gut microbiome richness.  
+
+`.fastq.gz` files associated with this study have been uploaded to the [Sequence Read Archive](https://www.ncbi.nlm.nih.gov/sra) under the BioProject number PRJNA942348 and can be accessed with accession numbers SRR23752615-SRR23752663.
+
+The recommended way to replicate the code is to download `Gut_microbiota_alpha_diversity_decrease_analyses.rmd` and "knit" it in R Studio after [installing](#Installation) all required packages. While knitting, the `.rmd` will create a new `GMADD` directory in the current working directory. Then it will download and unzip the `GMADD` repository into this new directory. From there all analyses will be performed and figures/tables in their raw form will be generated.
+
+For those who wish to explore the R environment after analyses have been run, `GMADD.rda`, which is a snapshot of all R objects and functions after analyses were run, can be loaded into R studio.
+
+
+## DADA2 Processing {#DADA2_processing}
+
+DADA2 processing of fastq files was performed on the HPC grid at Wayne State University similar to the [DADA2 tutorial](https://benjjneb.github.io/dada2/tutorial.html). Processing was completed in two steps utilizing two R scripts.
+
+```{r DADA2_processing_script1, eval=FALSE}
+library(dada2)
+library(pdftools)
+library(RPushbullet)
+
+options(error = recover)
+
+path <- "./"
+
+Study_Name <- "GMADD"
+list.files(path)
+
+fnFs <- sort(list.files(path, pattern="_R1_001.fastq", full.names = TRUE))
+fnRs <- sort(list.files(path, pattern="_R2_001.fastq", full.names = TRUE))
+
+sample.names <- sapply(strsplit(basename(fnFs), "_"), `[`, 1)
+
+filtFs <- file.path(path, "filtered", paste0(sample.names, "_F_filt.fastq.gz"))
+filtRs <- file.path(path, "filtered", paste0(sample.names, "_R_filt.fastq.gz"))
+out <- filterAndTrim(fnFs, filtFs, fnRs, filtRs, truncLen=c(230, 215),
+              maxN=0, maxEE=c(2,7), truncQ=2, rm.phix=TRUE,
+              compress=TRUE, multithread=FALSE)
+
+filtered_reads <- out
+
+write.csv(filtered_reads , file = "filtered_reads.csv")
+
+derepFs <- derepFastq(filtFs, verbose=TRUE)
+derepRs <- derepFastq(filtRs, verbose=TRUE)
+
+names(derepFs) <- sample.names
+names(derepRs) <- sample.names
+
+save.image(file= paste0("Dada2_Grid_Analysis_pre_ERR", Study_Name, ".rda"))
+savehistory(file= paste0("Dada2_Grid_Analysis_pre_ERR", Study_Name, ".rhistory"))
+
+pbPost("note", "Srt Err Lrn", "Now")
+
+errF <- learnErrors(derepFs, multithread=TRUE)
+
+errR <- learnErrors(derepRs, multithread=TRUE)
+
+Errors_plot <- plotErrors(errF, nominalQ=TRUE)
+
+pdf('Errors_plot.pdf')
+plot(Errors_plot)
+dev.off()
+
+save.image(file= paste0("Dada2_Grid_Analysis_pre_D2", Study_Name, ".rda"))
+savehistory(file= paste0("Dada2_Grid_Analysis_pre_D2", Study_Name, ".rhistory"))
+
+pbPost("note", "Srt d2", "Now")
+
+dadaFs <- dada(derepFs, err=errF, multithread=TRUE)
+dadaRs <- dada(derepRs, err=errR, multithread=TRUE)
+
+save.image(file= paste0("Dada2_Grid_Analysis_post_D2", Study_Name, ".rda"))
+savehistory(file= paste0("Dada2_Grid_Analysis_post_D2", Study_Name, ".rhistory"))
+
+mergers <- mergePairs(dadaFs, derepFs, dadaRs, derepRs, verbose=TRUE)
+
+# Inspect the merger data.frame from the first sample
+head(mergers[[1]])
+
+seqtab <- makeSequenceTable(mergers)
+
+pbPost("note", "Input", "Needed")
+
+table <- table(nchar(getSequences(seqtab))) 
+write.csv(table, file = "merged_seq_length.csv")
+
+save.image(file= paste0("Dada2_Grid_Analysis_post_merge_", Study_Name, ".rda"))
+savehistory(file= paste0("Dada2_Grid_Analysis_post_merge_", Study_Name, ".rhistory"))
+```
+
+Based on the distribution of merged sequence lengths, minimum and maximum length cutoffs were chosen.
+
+```{r DADA2_processing_script2, eval=FALSE}
+
+library(dada2)
+library(RPushbullet)
+
+load("Dada2_Grid_Analysis_post_merge_GMADD.rda")
+
+#user input for minimum and maximum sequence lengths based on expected read length
+min_len <- 252
+max_len <- 253
+
+seqtab2 <- seqtab[,nchar(colnames(seqtab)) %in% min_len:max_len]
+
+#Remove chimeras
+seqtab.nochim <- removeBimeraDenovo(seqtab2, method="pooled", multithread=FALSE, verbose=TRUE)
+
+#transpose seqtab to make easier to copy over
+seqtab.nochim.t <- t(seqtab.nochim)
+write.csv(seqtab.nochim.t, file = "seqtab.nochim.csv")
+
+dim(seqtab.nochim)
+sum(seqtab.nochim)/sum(seqtab2)
+
+#Track reads through the pipeline
+getN <- function(x) sum(getUniques(x))
+track <- cbind(out, sapply(dadaFs, getN), sapply(dadaRs, getN), sapply(mergers, getN), rowSums(seqtab.nochim))
+
+#If processing a single sample, remove the sapply calls: e.g. replace sapply(dadaFs, getN) with getN(dadaFs)
+colnames(track) <- c("input", "filtered", "denoisedF", "denoisedR", "merged", "nonchim")
+rownames(track) <- sample.names
+head(track)
+
+pbPost("note", "Tax", "Start")
+taxa <- assignTaxonomy(seqtab.nochim, "~/D2tax/silva_nr_v138_train_set.fa.gz", minBoot=80, multithread=TRUE)
+
+write.csv(taxa , file = "taxa.csv")
+
+taxa.species <- addSpecies(taxa, "~/D2tax/silva_species_assignment_v138.fa.gz")
+
+write.csv(taxa.species , file = "taxa_with_species.csv")
+
+merged <- cbind(taxa.species, seqtab.nochim.t)
+write.csv(merged, file = "merged.csv")
+
+save.image(file= paste0("Dada2_Grid_Analysis_RObjects_", Study_Name, ".rda"))
+pbPost("note", "Finished", "Saved")
+```
+
+## Setup {#Setup}
+
+This `.Rmd` document was successfully run with RStudio (Version 2022.07.1+554 "Spotted Wakerobin") and R (Version 4.0.3) to produce the figures and tables in Panzer et al. 2023 DOI:___. The version of RStudio can be checked under `Help` -> `About RStudio`. The version of R can be checked and changed under `Tools` -> `Global Options`. In the `General` side tab, there should be an R version listed near the top of the window, which can be changed, but this requires RStudio to restart before the version change takes effect. RStudio version 2022.07.1+554 is stable and can be downloaded [here](https://dailies.rstudio.com/version/2022.07.1+554/). R version 4.0.3 for Windows can be downloaded [here](https://cran.r-project.org/bin/windows/base/old/4.0.3/). Distributions for Linux and macOS can be downloaded [here](https://cran.r-project.org/).
+
+In addition to downloading `RStudio` and `R`, `Rtools` is also necessary since it is required for the installation of the R package `devtools`, which is used here to install older versions of packages and packages residing on github. `Rtools` version 4.0 for windows, which is compatible with `R/4.0.3`, can be downloaded [here](https://cran.r-project.org/bin/windows/Rtools/history.html). Be sure to leave the installation directory as the default `C:/Rtools/`.
+
+### Installation {#Installation}
+
+These installation chunks are not evaluated during knitting, but installation of these packages is required before the document will successfully knit. Packages can be installed with several commands. The following chunk lists the code for the specific packages, which were used to successfully knit the document. If a package has never been installed before,  it may be necessary to first install the package with `BiocManager::install("package_name")`, and then use `devtools::install_version("package_name", version = "1.2.3")` for the exact version. If a package has been installed but was built under a different R 4.0 version, it may be necessary to re-install packages using `install.packages("package_name", force = TRUE)`, or to select a specific version with `devtools::install_version("package_name", version = "1.2.3")`. `install.packages("Package_Name")` is also another option.
+
+For exact versions please **skip updates to other packages when asked**.
+
+```{r installing_devtools_and_Rtools, eval=FALSE}
+
+if (!requireNamespace("BiocManager", quietly = TRUE)){
+  install.packages("BiocManager")
+}
+
+#allow R to find Rtools via environment variable
+Sys.setenv(PATH=paste("C:/Rtools/bin",Sys.getenv("PATH"),sep=";"))
+Sys.setenv(BINPREF="C:/Rtools/mingw_$(WIN)/bin/")
+#double checking that the path is correct
+Sys.which("make")
+
+#devtools required to install package `dada2tools`
+if (!requireNamespace("devtools", quietly = TRUE)){
+  BiocManager::install("devtools")
+}
+#installs version 2.1.6 of the usethis package if not currently installed
+if(!packageVersion("usethis") == "2.1.6"){
+  devtools::install_version("usethis", version = "2.1.6")
+}
+
+#installs version 2.4.4 of the devtools package if not currently installed
+if(!packageVersion("devtools") == "2.4.4"){
+  devtools::install_version("devtools", version = "2.4.4")
+}
+
+library(devtools)
+```
+
+Note that the R package `reticulate` is only required for saving `plotly` dynamic plots as static images. This process also requires the installation of `miniconda`. Please refer to [this link](https://search.r-project.org/CRAN/refmans/plotly/html/save_image.html) for installation instructions within R. Otherwise, omit all lines with `save_image()`.
+
+```{r installing_packages, message=FALSE, warning=FALSE, eval=FALSE}
+#installs dada2tools version 1.6 from github.
+if (!requireNamespace("dada2tools", quietly = TRUE)){
+  devtools::install_github("jp589/dada2tools", build_vignettes = TRUE)
+}
+devtools::install_version("vegan", version = "2.5.6")
+devtools::install_version("phyloseq", version = "1.34.0")
+devtools::install_version("openxlsx", version = "4.2.4")
+devtools::install_version("dplyr", version = "1.0.7")
+devtools::install_version("ggplot2", version = "3.3.6")
+devtools::install_version("plotly", version = "4.10.0.9001")
+devtools::install_version("reticulate", version = "1.24")
+devtools::install_version("SummarizedExperiment", version = "1.20.0")
+devtools::install_version("finalfit", version = "1.0.6")
+devtools::install_version("lefser", version = "1.0.0")
+devtools::install_version("ggpubr", version = "0.4.0")
+devtools::install_version("curl", version = "4.3.2")
+```
+
+### Package Loading {#Package_Loading}
+
+```{r loading packages, message=FALSE, warning=FALSE}
+#loading packages
+library(dada2tools)
+library(phyloseq)
+library(openxlsx)
+library(dplyr)
+library(vegan)
+library(ggplot2)
+library(plotly)
+library(reticulate)
+library(SummarizedExperiment)
+library(finalfit)
+library(lefser)
+library(ggpubr)
+library(curl)
+
+sessionInfo()
+```
+
+## Function definitions {#Function_definitions}
+
+These first two functions are wrappers for `phyloseq` and `decontam` functions, which can be applied to samples with normal levels of biomass to remove ASVs more prevalent in negative control samples.
+
+```{r DECONTAM_functions}
+#both use isContaminant
+#physeq is a phyloseq object
+#thresh is a numeric value between 0 and 1 denoting the cutoff between true and contaminant taxa
+#study_name is a character vector which will be listed in the title of the generated plots
+decontam_histo_prev_plots2 <- function(physeq, thresh = 0.5, study_name){
+
+  p <- prev <- physeq.neg <- physeq.pos <- contaminant <- NULL
+  #creates new column of type logical to determine which samples are controls (TRUE) or samples (FALSE) based on data in Type column.
+  phyloseq::sample_data(physeq)$is.neg <- phyloseq::sample_data(physeq)$data == "control"
+
+  #runs isNotContaminant() which splits taxa up into contaminants and true taxa.
+  #isNotContaminant() is chosen here over isContaminant() since samples are presumed low biomass and the majority of taxa are assumed to be contaminants.
+  #Keep in mind that taxa with true are not contaminants.
+  contamdf.prev <- decontam::isContaminant(physeq, neg = "is.neg", detailed = TRUE, threshold = thresh)
+  #counts how many true taxa and contaminants there are and prints it to the console.
+  print("True represents contaminants:")
+  print(table(contamdf.prev$contaminant))
+
+  #code for histogram plotting to evaluate for an appropriate threshold
+  #Green tones used for the prevalence palette
+  prevalencePalette <- c("2" = "#edf8e9", "3-5" = "#bae4b3", "6-10" = "#74c476", "11+" = "#238b45")
+  #getPalette local function calls colorRamp Palette on the prevalence palette
+  getPalette = grDevices::colorRampPalette(prevalencePalette)
+  #determines the number of steps that the histogram should have (how many unique counts were there at each decontam score level)
+  steps <- length(table(contamdf.prev$prev))
+  #splits the palette to number of steps determined.
+  colr <- getPalette(steps)
+  #creates the title for histogram
+  histo_title <- paste("Decontam Histgram for", study_name)
+  #fill has to be in factor form and then use scale fill manual() to select palatte to use.
+  decontam_histogram <- ggplot2::ggplot(contamdf.prev, ggplot2::aes(x = p, fill = factor(prev))) + ggplot2::geom_histogram(bins = 100) + ggplot2::labs(x = 'Decontam score', y = 'Number of ASVs') + ggplot2::scale_x_continuous(breaks = seq(0, 1, 0.05)) + ggplot2::scale_fill_manual(values = colr) + ggplot2::theme_dark() + ggplot2::ggtitle(histo_title)
+
+  #code for prevalence plotting
+  #converts sample counts into prevalence counts by turning values greater than 0 into 1's.
+  physeq.pa <- phyloseq::transform_sample_counts(physeq, function(abund) 1*(abund>0))
+
+  #subsets samples which are controls into phyloseq object physeq.pa.neg
+  physeq.pa.neg <- phyloseq::prune_samples(phyloseq::sample_data(physeq.pa)$data == "control", physeq.pa)
+
+  #subsets samples which are actual samples into phyloseq object physeq.pa.pos
+  physeq.pa.pos <- phyloseq::prune_samples(phyloseq::sample_data(physeq.pa)$data == "sample", physeq.pa)
+
+  #creates a data frame where taxa prevalence is summed up across control and true samples. Contaminants are indicated in !contamdf.prev$not.contaminant
+  df.pa <- data.frame(physeq.pos= phyloseq::taxa_sums(physeq.pa.pos), physeq.neg = phyloseq::taxa_sums(physeq.pa.neg),
+                      contaminant=contamdf.prev$contaminant)
+
+  #creates title for prevalence plot
+  prev_title <- paste("Contaminant Prevalence at Threshold:", thresh, "for", study_name, "Study")
+
+  #plots prevalence with taxa technical control prevalence on the x-axis and taxa sample prevalence on the y-axis.
+  prev_plot <- ggplot2::ggplot(data=df.pa, ggplot2::aes(x=physeq.neg, y=physeq.pos, color=contaminant)) + ggplot2::geom_point() +
+    ggplot2::xlab("Prevalence in Technical Controls") + ggplot2::ylab("Prevalence in Samples") + ggplot2::ggtitle(prev_title)
+
+  #returns plot list
+  list(Histogram = decontam_histogram, Prevalence_Plot = prev_plot)
+}
+
+#df is a dataframe with ASVs on rows and samples on columns
+#physeq is a phyloseq object generated from df
+#thresh is a numeric value between 0 and 1 denoting the cutoff between true and contaminant taxa
+decontaminate2 <- function(df, physeq, thresh){
+
+  #creates new column of type logical to determine which samples are controls (TRUE) or samples (FALSE) based on data in Type column.
+  phyloseq::sample_data(physeq)$is.neg <- phyloseq::sample_data(physeq)$data == "control"
+
+  #isNotContaminant() is chosen here over isContaminant() since samples are presumed low biomass and the majority of taxa are assumed to be contaminants.
+  #Keep in mind that Trues are not contaminants
+  contamdf.prev <- decontam::isContaminant(physeq, neg = "is.neg", detailed = TRUE, threshold = thresh)
+
+  #subsetting contaminants and 'true taxa'
+  true_taxa <- subset(df, !contamdf.prev$contaminant)
+  contaminants <- subset(df, contamdf.prev$contaminant)
+
+  #returns list of dataframes true taxa and contaminants along with the threshold used.
+  list(TrueTaxa = true_taxa, Contaminants = contaminants, Threshold = thresh)
+}
+```
+
+The following functions are slightly modified versions of functions found in the R package `lefser`. The main difference is that the grouping column is set by `lefse()` and not by `lefse_plot()` so that the grouping column in the returned LEfSe dataframe can be descriptive rather than only `0` or `1`. This impacts the legend plotted by `lefse_plot()`. Helper functions `.numeric01`, `filterKruskal`, and `createUniqueValues` are unchanged, but are made globally available to `lefse()` and `lefse_plot()`.
+
+For an overview of LEfSe function parameters and usage, please read the overview found [here](https://waldronlab.io/lefser/articles/lefser.html).
+
+```{r LEfSe_functions}
+lefse_plot <- function (df, colors = c("red", "forestgreen"), trim.names = TRUE) 
+{
+  df <- lefser:::trunc(df, trim.names)
+  plt <- ggplot2::ggplot(df, aes(reorder(Names, scores), scores)) + 
+    ylab("LDA SCORE (log 10)") + theme(axis.title.y = element_blank(), 
+                                       axis.title.x = element_text(size = 11, face = "bold"), 
+                                       axis.text.y = element_text(vjust = 0.7, size = 9, face = "bold"), 
+                                       axis.text.x = element_text(vjust = 0.7, size = 9, face = "bold"), 
+                                       plot.title = element_text(hjust = 0.5, size = 13, face = "bold")) + 
+    geom_bar(stat = "identity", aes(fill = Group)) + scale_fill_manual(values = colors) + 
+    coord_flip()
+  return(plt)
+}
+
+.numeric01 <- function (x) 
+{
+  x <- as.factor(x)
+  uvals <- levels(x)
+  ifelse(x == uvals[1L], 0L, 1L)
+}
+
+filterKruskal <- function (expr, group, p.value) 
+{
+  kw.res <- apply(expr, 1L, function(x) {
+    kruskal.test(x ~ group)[["p.value"]]
+  })
+  kw.sub <- kw.res <= p.value
+  kw.sub[is.na(kw.sub)] <- FALSE
+  expr[kw.sub, ]
+}
+
+createUniqueValues <- function (df, group) 
+{
+  orderedrows <- rownames(df)
+  splitdf <- split(df, group)
+  maxim <- vapply(table(group), function(x) max(x * 0.5, 4), 
+                  numeric(1L))
+  for (i in seq_along(splitdf)) {
+    sdat <- splitdf[[i]]
+    splitdf[[i]][] <- lapply(sdat, function(cols) {
+      if (length(unique(cols)) > maxim[i]) 
+        cols
+      else abs(cols + rnorm(length(cols), mean = 0, sd = max(cols * 
+                                                               0.05, 0.01)))
+    })
+  }
+  df <- do.call(rbind, unname(splitdf))
+  df[match(orderedrows, rownames(df)), , drop = FALSE]
+}
+
+lefse <- function (expr, kruskal.threshold = 0.05, wilcox.threshold = 0.05, 
+          lda.threshold = 2, groupCol = "GROUP", blockCol = NULL, 
+          assay = 1L, trim.names = FALSE) 
+{
+  groupf <- colData(expr)[[groupCol]]
+  if (is.null(groupf)) 
+    stop("A valid group assignment 'groupCol' must be provided")
+  groupf <- as.factor(groupf)
+  groupsf <- levels(groupf)
+  if (length(groupsf) != 2L) 
+    stop("Group classification is not dichotomous:\n", "Found (", 
+         paste(groupsf, collapse = ", "), ")")
+  group <- lefser:::.numeric01(groupf)
+  groups <- levels(groupsf)
+  expr_data <- assay(expr, i = assay)
+  expr_sub <- lefser:::filterKruskal(expr_data, group, kruskal.threshold)
+  if (!is.null(blockCol)) {
+    block <- as.factor(colData(expr)[[blockCol]])
+    expr_sub <- fillPmatZmat(groupf, block, expr_sub, wilcox.threshold)
+  }
+  expr_sub_t <- t(expr_sub)
+  expr_sub_t_df <- as.data.frame(expr_sub_t)
+  expr_sub_t_df <- lefser:::createUniqueValues(expr_sub_t_df, groupf)
+  expr_sub_t_df <- cbind(expr_sub_t_df, class = group)
+  lfk <- nrow(expr_sub_t_df)
+  rfk <- floor(lfk * 2/3)
+  ncl <- length(groups)
+  min_cl <- as.integer(min(table(expr_sub_t_df$class)) * 2/3 * 
+                         2/3 * 0.5)
+  min_cl <- max(min_cl, 1)
+  eff_size_mat <- replicate(30, suppressWarnings(lefser:::ldaFunction(expr_sub_t_df, 
+                                                             lfk, rfk, min_cl, ncl, groups)), simplify = TRUE)
+  raw_lda_scores <- rowMeans(eff_size_mat)
+  processed_scores <- sign(raw_lda_scores) * log((1 + abs(raw_lda_scores)), 
+                                                 10)
+  processed_sorted_scores <- sort(processed_scores)
+  scores_df <- data.frame(Names = names(processed_sorted_scores), 
+                          scores = as.vector(processed_sorted_scores), stringsAsFactors = FALSE)
+  scores_df <- lefser:::trunc(scores_df, trim.names)
+  threshold_scores <- abs(scores_df$scores) >= lda.threshold
+  scores_df <- scores_df[threshold_scores, ]
+  scores_df$Group <- dplyr::case_when(
+    scores_df$scores < 0 ~ groupsf[1],
+    scores_df$scores > 0 ~ groupsf[2]
+  )
+  return(scores_df)
+}
+```
+
+`split_violin_plotly()` produces split violin plots for both Shannon and Chao1 alpha diversity metrics using the R package `plotly`. A subplot is returned which displays the Shannon and Chao1 split violin plots together. For further violin plot documentation visit [plotly.com](https://plotly.com/r/violin/).
+
+```{r split_violin_function}
+
+#diversity_df data frame with metadata and alpha diversity data
+#shared_axis group column to allow for data to be grouped into a single or multiple split violin plots
+#split_axis group column in diversity_df on which to split data into positive and negative sides of the violin
+#META2 optional metadata specifically listing MDRO information by subject
+#flipped is a boolean value which determines if groups are flipped to the positive or negative side of the split violins
+split_violin_plotly <- function(diversity_df, shared_axis, split_axis, META2, flipped = FALSE){
+  neg_num <- 1
+  pos_num <- 2
+  if(!missing(flipped)){
+    if(flipped==TRUE){
+      neg_num <- 2
+      pos_num <- 1
+    }
+  }
+  if(!missing(META2)){
+    #adds negative MDRO data
+    META2_neg <- META2 %>% filter(Patient_number %in% diversity_df$Patient_number) %>% filter(diversity_df[[split_axis]] == unique(sort(diversity_df[[split_axis]]))[neg_num])
+    textly_neg <- ~paste("Subject: ", diversity_df$Patient_number[diversity_df[[split_axis]] == unique(sort(diversity_df[[split_axis]]))[neg_num]], "<br>MDRO", META2_neg$MRDO1, "<br>MDRO", META2_neg$MDRO2, "<br>MDRO", META2_neg$MDRO3, "<br>MDRO", META2_neg$MDRO4)
+    #adds positive MDRO data
+    META2_pos <- META2 %>% filter(Patient_number %in% diversity_df$Patient_number) %>% filter(diversity_df[[split_axis]] == unique(sort(diversity_df[[split_axis]]))[pos_num])
+    textly_pos <- ~paste("Subject: ", diversity_df$Patient_number[diversity_df[[split_axis]] == unique(sort(diversity_df[[split_axis]]))[pos_num]], "<br>MDRO", META2_pos$MDRO1, "<br>MDRO", META2_pos$MDRO2, "<br>MDRO", META2_pos$MDRO3, "<br>MDRO", META2_pos$MDRO4)
+  } else {
+    textly_neg <- ~paste("Subject:", diversity_df$Patient_number[diversity_df[[split_axis]] == unique(sort(diversity_df[[split_axis]]))[neg_num]])
+    textly_pos <- ~paste("Subject:", diversity_df$Patient_number[diversity_df[[split_axis]] == unique(sort(diversity_df[[split_axis]]))[pos_num]])
+  }
+  
+  A_plotly_Shannon <- diversity_df %>% plot_ly(type = 'violin')
+  #adds negative side to Shannon violin plot
+  A_plotly_Shannon <- A_plotly_Shannon %>% add_trace(
+  x = diversity_df[[shared_axis]][diversity_df[[split_axis]] == unique(sort(diversity_df[[split_axis]]))[neg_num]],
+  y = ~Shannon[diversity_df[[split_axis]] == unique(sort(diversity_df[[split_axis]]))[neg_num]],
+  legendgroup = unique(sort(diversity_df[[split_axis]]))[neg_num],
+  scalegroup = unique(sort(diversity_df[[split_axis]]))[neg_num],
+  name = unique(sort(diversity_df[[split_axis]]))[neg_num],
+  side = "negative",
+  box = list(
+    visible = TRUE,
+    fillcolor = "white",
+    line = list(
+      color = "black"
+    )
+  ),
+  meanline = list(
+    visible = TRUE
+  ),
+  color = I("#1B9E77"),
+  points = "all",
+  pointpos = -.5,
+  jitter = 0.5,
+  hovertext = textly_neg
+)
+#adds positive side to Shannon violin plot
+
+A_plotly_Shannon <- A_plotly_Shannon %>% add_trace(
+  x = diversity_df[[shared_axis]][diversity_df[[split_axis]] == unique(sort(diversity_df[[split_axis]]))[pos_num]],
+  y = ~Shannon[diversity_df[[split_axis]] == unique(sort(diversity_df[[split_axis]]))[pos_num]],
+  legendgroup = unique(sort(diversity_df[[split_axis]]))[pos_num],
+  scalegroup = unique(sort(diversity_df[[split_axis]]))[pos_num],
+  name = unique(sort(diversity_df[[split_axis]]))[pos_num],
+  side = "positive",
+  box = list(
+    visible = TRUE,
+    fillcolor = "white",
+    line = list(
+      color = "black"
+    )
+  ),
+  meanline = list(
+    visible = TRUE
+  ),
+  color = I("#D95F02"),
+  points = "all",
+  pointpos = .5,
+  jitter = 0.5,
+  hovertext = textly_pos
+)
+
+A_plotly_Shannon <- A_plotly_Shannon %>%
+  layout(
+    xaxis = list(
+      title = ""
+    ),
+    yaxis = list(
+      title = "Shannon",
+      zeroline = F)
+);A_plotly_Shannon
+
+#adds Chao split violin plot
+A_plotly_Chao <- diversity_df %>% plot_ly(type = 'violin')
+
+A_plotly_Chao <- A_plotly_Chao %>% add_trace(
+  x = diversity_df[[shared_axis]][diversity_df[[split_axis]] == unique(sort(diversity_df[[split_axis]]))[neg_num]],
+  y = ~Chao[diversity_df[[split_axis]] == unique(sort(diversity_df[[split_axis]]))[neg_num]],
+  legendgroup = unique(sort(diversity_df[[split_axis]]))[neg_num],
+  name = unique(sort(diversity_df[[split_axis]]))[neg_num],
+  side = "negative",
+  scalegroup = "Chao",
+  box = list(
+    visible = TRUE,
+    fillcolor = "white",
+    line = list(
+      color = "black"
+    )
+  ),
+  meanline = list(
+    visible = TRUE
+  ),
+  color = I("#1B9E77"),
+  points = "all",
+  pointpos = -.5,
+  jitter = 0.5,
+  showlegend = F,
+  hovertext = textly_neg
+)
+
+#adds positive side to Chao violin plot
+A_plotly_Chao <- A_plotly_Chao %>% add_trace(
+  x = diversity_df[[shared_axis]][diversity_df[[split_axis]] == unique(sort(diversity_df[[split_axis]]))[pos_num]],
+  y = ~Chao[diversity_df[[split_axis]] == unique(sort(diversity_df[[split_axis]]))[pos_num]],
+  legendgroup = unique(sort(diversity_df[[split_axis]]))[pos_num],
+  name = unique(sort(diversity_df[[split_axis]]))[pos_num],
+  side = "positive",
+  scalegroup = "Chao",
+  box = list(
+    visible = TRUE,
+    fillcolor = "white",
+    line = list(
+      color = "black"
+    )
+  ),
+  meanline = list(
+    visible = TRUE
+  ),
+  color = I("#D95F02"),
+  points = "all",
+  pointpos = .5,
+  jitter = 0.5,
+  showlegend = F,
+  hovertext = textly_pos
+)
+A_plotly_Chao <- A_plotly_Chao %>%
+  layout(
+    xaxis = list(
+      title = ""
+    ),
+    yaxis = list(
+      title = "Chao1",
+      zeroline = F)
+);A_plotly_Chao
+
+A_plotly <- subplot(nrows = 1, A_plotly_Shannon, A_plotly_Chao, shareX = F, shareY = F, titleX = F, titleY = T, margin = 0.05);A_plotly
+}
+```
+
+## Data Processing {#Data_processing}
+
+Data processing begins by downloading data and metadata from the [github repository](https://github.com/jp589/GMADD/). Then the data are cleaned and sorted for ease of analysis.
+
+```{r data_processing}
+
+#if directory doesn't exist, create new directory and make current working directory
+if(!dir.exists("./GMADD_analysis/")){
+  dir.create("./GMADD_analysis/")
+};setwd(dir = "./GMADD_analysis/")
+
+#downloads zipped repository and unzips into current working directory
+url <- "https://github.com/jp589/GMADD/zipball/master"
+tmp <- tempfile()
+curl::curl_download(url, tmp, mode = "wb")
+unzip(tmp);unlink(tmp)
+
+#set working directory to location of unzipped files
+setwd(list.dirs(full.names = TRUE)[2])
+
+#loading ASV and sample data
+merged <- read.csv(file = "GMADD_merged.csv", header = TRUE)
+#cleans sequence data and renames rows with numbered ASVs
+merged_clean <- dada2tools::dadaset_clean(df = merged, read_thresh = 100);rownames(merged_clean) <- paste0("ASV", 1:nrow(merged_clean))
+#splits merged_clean into taxonomy and ASV table objects
+TAX <- merged_clean[,1:8];ASV <- merged_clean[,9:ncol(merged_clean)]
+
+#loads metadata
+meta <- read.xlsx(xlsxFile = "GMADD_study_metadata.xlsx", sheet = 1, startRow = 1)
+#loads metadata key
+meta_key <- read.xlsx(xlsxFile = "GMADD_study_metadata.xlsx", sheet = 2, startRow = 1)
+
+
+#substitutes values based on key
+meta$Place_of_admission <- case_when(
+    meta$Place_of_admission == "1" ~ "Home",
+    meta$Place_of_admission == "2" ~ "Nursing Home",
+    meta$Place_of_admission == "3" ~ "Subacute Rehab",
+    meta$Place_of_admission == "4" ~ "Other Hospital",
+    meta$Place_of_admission == "5" ~ "Homeless",
+    meta$Place_of_admission == "NA" ~ "NA"
+)
+#substitutes values based on key
+meta$MDRO_status <- case_when(
+  meta$MDRO_organism == "12" ~ "Negative",
+  meta$MDRO_organism == "13" ~ "Negative",
+  meta$MDRO_organism == "NA" ~ "NA",
+  TRUE ~ "Positive"
+)
+#substitutes values based on key
+meta$C_diff <- case_when(
+  meta$C_diff == "1" ~ "C. diff positive",
+  meta$C_diff == "0" ~ "C. diff negative",
+  TRUE ~ "NA"
+)
+#substitutes values based on key
+meta$C_diff_hist <- case_when(
+  meta$C_diff_prior_history == "1" ~ "Prior C.diff",
+  meta$C_diff_prior_history == "0" ~ "No Prior C.diff",
+  TRUE ~ "NA"
+)
+#substitutes values based on key
+meta$COVID19_Pos <- case_when(
+  meta$COVID19_Pos == "0" ~ "COVID19 Negative",
+  meta$COVID19_Pos == "1" ~ "COVID19 Positive",
+  TRUE ~ "NA"
+)
+#substitutes values based on key
+meta$Exposure_to_antibiotics_during_visit <- case_when(
+  meta$Exposure_to_antibiotics_during_visit == "0" ~ "No_antibiotics",
+  meta$Exposure_to_antibiotics_during_visit == "1" ~ "Given_antibiotics"
+)
+#creates `Patient_Status` column to summarize whether patients had COVID19, MDRO, or C. difficile infections in combination or in isolation.
+meta$Patient_Status <- case_when(
+  meta$COVID19_Pos == "COVID19 Positive" & meta$MDRO_status == "Positive" & meta$C_diff == "C. diff positive" ~ "COVID19/MDRO/Cdiff",
+  meta$COVID19_Pos == "COVID19 Positive" & meta$MDRO_status == "Positive" & meta$C_diff == "C. diff negative" ~ "COVID19/MDRO",
+  meta$COVID19_Pos == "COVID19 Positive" & meta$MDRO_status == "Negative" & meta$C_diff == "C. diff positive" ~ "COVID19/Cdiff",
+  meta$COVID19_Pos == "COVID19 Positive" & meta$MDRO_status == "Negative" & meta$C_diff == "C. diff negative" ~ "COVID19",
+  meta$COVID19_Pos == "COVID19 Negative" & meta$MDRO_status == "Positive" & meta$C_diff == "C. diff positive" ~ "MDRO/Cdiff",
+  meta$COVID19_Pos == "COVID19 Negative" & meta$MDRO_status == "Positive" & meta$C_diff == "C. diff negative" ~ "MDRO",
+  meta$COVID19_Pos == "COVID19 Negative" & meta$MDRO_status == "Negative" & meta$C_diff == "C. diff positive" ~ "Cdiff",
+  meta$COVID19_Pos == "COVID19 Negative" & meta$MDRO_status == "Negative" & meta$C_diff == "C. diff negative" ~ "Control", TRUE ~ "Blank")
+#divides subjects into weight groups with the split at 80kg
+meta$Weight_kg <- as.numeric(meta$Weight_kg);split_weight <- 80
+meta$Weight_group <- case_when(
+  meta$Weight_kg > split_weight ~ "High Weight",
+  meta$Weight_kg < split_weight ~ "Low Weight"
+)
+
+#substitutes values based on key
+meta$Sex <- case_when(grepl("0", meta$Sex) ~ "Male",
+                      grepl("1", meta$Sex) ~ "Female")
+
+#move Case_Control to end
+meta <- meta[,c(1:63,65:68,64)]
+#adds extraction blanks to metadata
+meta_blanks <- cbind(c("E1", "E2", "E3", "E4"), matrix(data = rep("NA", 66*4), nrow = 4, ncol = 66), c(rep("Blank",4)))
+colnames(meta_blanks) <- colnames(meta); meta_blanks <- as.data.frame(meta_blanks)
+#combines sample metadata with extraction blank metadata
+META <- rbind(meta, meta_blanks)
+
+#orders samples in ASV table by metadata
+ASV <- ASV[,META$Patient_number]
+
+#adding a blank column for shared axis in split violin plots
+META$Blank <- ""
+#converting columns to numeric
+META$Age <- as.numeric(META$Age);META$Weight_kg <- as.numeric(META$Weight_kg);META$BMI <- as.numeric(META$BMI);META$Length_of_stay <- as.numeric(META$Length_of_stay)
+```
+
+### DECONTAM Processing {#DECONTAM_processing}
+
+Removes ASVs which were more prevalent in extraction blanks than in fecal samples.
+
+```{r DECONTAM}
+META$DECONTAM_type <- case_when(
+  META$Case_Control == "Case" ~ "sample",
+  META$Case_Control == "Control" ~ "sample",
+  META$Case_Control == "Blank" ~ "control"
+)
+
+merged_order <- cbind(TAX, ASV)
+DECO_prep <- dada2tools::decontam_prep(
+  df = merged_order,
+  meta = META,
+  type = "DECONTAM_type", 
+  sample_col = "Patient_number"
+)
+decontam_plots <- decontam_histo_prev_plots2(physeq = DECO_prep, thresh = 0.5, study_name = "GMADD")
+decontam_plots$Prevalence_Plot
+
+decontaminated <- decontaminate2(df = merged_order, physeq = DECO_prep, thresh = 0.5)
+true_taxa <- decontaminated$TrueTaxa
+#removal of blanks
+true_taxa <- subset(true_taxa, select = -c(E1, E2, E3, E4))
+ASV_Deco <- true_taxa[,9:ncol(true_taxa)]
+TAX_Deco <- true_taxa[,1:8]
+```
+
+```{r DECONTAM_histogram, fig.width=9, fig.height=5}
+decontam_plots$Histogram
+```
+
+### Normalization {#Normalization}
+
+Allows for diversity comparisons between samples by equalizing sampling depth across all samples.
+
+```{r normalization}
+#normalizing data
+phy <- dada2tools::phyloseqize(merged_df = ASV_Deco, tax_df = TAX_Deco)
+#sampling depth after normalization
+min(sample_sums(phy))
+phy_rare <- phyloseq::rarefy_even_depth(phy, replace = FALSE, rngseed = 1)
+rarefied <- dada2tools::dephy(phy_rare)
+TAX_rare <- rarefied[,1:8]
+ASV_rare <- rarefied[,9:ncol(rarefied)]
+
+META <- META %>% filter(Patient_number %in% colnames(ASV_rare))
+```
+
+### MDRO infection assessment {#MRDO_setup}
+
+Some subjects had multiple MDRO infections at the same time. Here we break down the MDRO infection data by subject.
+
+```{r META_MDRO_setup}
+
+#code to get META set up.
+META_MDRO <- data.frame(Patient_number = META$Patient_number[1:45], MDRO = META$MDRO_organism[1:45])
+META_MDRO <- META_MDRO %>% mutate(MDRO = strsplit(as.character(MDRO), ",")) %>% tidyr::unnest(MDRO)
+META_MDRO$MDRO <- as.numeric(META_MDRO$MDRO)
+META_MDRO_wide <- data.frame(Patient_number = unique(META_MDRO$Patient_number), MDRO1 = rep(12, 45), MDRO2 = rep(12, 45), MDRO3 = rep(12, 45), MDRO4 = rep(12, 45))
+
+#need to make 4 columns representing four directions of arrows to be plotted with each row as a different subject
+for (i in 1:length(unique(META_MDRO$Patient_number))){
+  which_ones <- META_MDRO$Patient_number == unique(META_MDRO$Patient_number)[i]
+  how_many <- sum(META_MDRO$Patient_number == unique(META_MDRO$Patient_number)[i])
+  if (how_many == 1){
+    subset <- META_MDRO[which_ones,]
+    META_MDRO_wide[i,2] <- subset$MDRO
+  }else{
+      for(k in 1:how_many){
+        subset <- META_MDRO[which_ones,]
+        META_MDRO_wide[i,k+1] <- subset$MDRO[k]
+      }
+  }
+}
+#recodes 13 to 12 since both indicate that there were no MDROs
+META_MDRO_wide$MDRO1 <- case_when(
+  META_MDRO_wide$MDRO1 == 13 ~ 12,
+  TRUE ~ META_MDRO_wide$MDRO1
+)
+
+#takes key value pairs from MDRO organism key and splits by ` = `
+MDRO_key <- as.data.frame(t(as.data.frame(strsplit(meta_key$MDRO_organism, split = " = "))));rownames(MDRO_key) <- 1:13
+MDRO_key$V1 <- as.numeric(MDRO_key$V1)
+#extracts character vector of MDROs in key
+MDRO_key_vec <- as.character(MDRO_key$V2)
+#names vector by number and changes value for 12 to NA
+names(MDRO_key_vec) <- MDRO_key$V1; MDRO_key_vec[12] <- "NA"
+#instantiates META_MDRO_wide_recoded
+META_MDRO_wide_recoded <- META_MDRO_wide
+#Recodes by key vector
+META_MDRO_wide_recoded$MDRO1 <- recode(META_MDRO_wide$MDRO1, !!!MDRO_key_vec)
+META_MDRO_wide_recoded$MDRO2 <- recode(META_MDRO_wide$MDRO2, !!!MDRO_key_vec)
+META_MDRO_wide_recoded$MDRO3 <- recode(META_MDRO_wide$MDRO3, !!!MDRO_key_vec)
+META_MDRO_wide_recoded$MDRO4 <- recode(META_MDRO_wide$MDRO4, !!!MDRO_key_vec)
+
+META_MDRO$MDRO_name <- recode(META_MDRO$MDRO, !!!MDRO_key_vec)
+
+#converts `META_MDRO_wide` to number of MDRO per subject
+META_MDRO_wide$Num_MDROs <- as.numeric(table(META_MDRO$Patient_number)[unique(META_MDRO$Patient_number)]) - (META_MDRO_wide$MDRO1 == 12)*1
+
+#most prevalent MDROs include Escherichia coli and Pseudomonas aeruginosa
+sort(table(META_MDRO$MDRO_name), decreasing = TRUE)
+
+#append to META
+META <- cbind(META, META_MDRO_wide[,2:6])
+```
+
+### Cohort body weight distribution {#Weight_distribution}
+
+Weight distribution across the cohort.
+
+```{r Weight_plot, fig.width= 8}
+
+fig <- plot_ly(
+    data = META,
+    type = "scatter",
+    mode = "markers",
+    x = ~reorder(Patient_number, Weight_kg),
+    y = ~Weight_kg,
+    color = ~Sex,
+    colors = c("pink", "blue")
+) %>% add_lines(y = 80,line = list(
+  color = "grey"
+)) %>% layout(
+    yaxis = list(
+        zeroline = F,
+        title = "Weight (kg)"
+    ),
+    xaxis = list(
+      title = "Subjects"
+    ),
+    legend = list(
+      title = "Sex"
+    )
+);fig
+
+save_image(fig, file = "Fig_S1_weight_distribution_of_cohort_by_sex.png")
+```
+
+## Alpha diversity calculations {#Alpha_diversity}
+
+Chao1 and Shannon alpha diversity metrics were calculated with `vegan`.
+
+```{r alpha_diversity_calcs}
+#alpha diversity metrics
+chao <- c()
+#for each sample on columns calculate Chao1
+for(i in 1:dim(ASV_rare)[2]){
+  chao[i] <- vegan::estimateR(ASV_rare[,i])[[2]]
+}
+#combines metadata with Shannon and Chao1 alpha diversity metric calculations
+diversity_Alpha_with_M <- cbind(
+  data.frame(
+    Shannon = vegan::diversity(x = ASV_rare, index = "shannon", MARGIN = 2), 
+    Chao = chao,
+    META)
+  )
+#convert antibiotic columns to numeric
+diversity_Alpha_with_M[,55:64] <- lapply(diversity_Alpha_with_M[,55:64], as.numeric)
+
+div_Alpha_Low <- diversity_Alpha_with_M %>% filter(Weight_group == "Low Weight")
+div_Alpha_High <- diversity_Alpha_with_M %>% filter(Weight_group == "High Weight")
+```
+
+### Exposure to antibiotics {#Antibiotic_exposure}
+
+All subjects exposed to antibiotics during their visit had significantly decreased alpha diversity compared to those not exposed.
+
+```{r exposure_to_antibiotics}
+
+p <- split_violin_plotly(diversity_df = diversity_Alpha_with_M, shared_axis = "Blank", split_axis = "Exposure_to_antibiotics_during_visit", flipped = TRUE);p
+save_image(p=p, file = "Fig_1A_split_violin_exposure_to_antibiotics_alpha.png", width = 8, height = 8)
+
+anova_results <- aov(Shannon ~ Exposure_to_antibiotics_during_visit, data = diversity_Alpha_with_M); summary(anova_results) #p = 0.0422
+
+anova_results <- aov(Chao ~ Exposure_to_antibiotics_during_visit, data = diversity_Alpha_with_M); summary(anova_results) #p = 0.000552
+```
+
+
+### Body weight {#Body_weight}
+
+Body weight dependent alpha diversity decreases after antibiotic administration were observed.
+
+```{r Alpha_diversity_trends_Weight_split, fig.width=8}
+#significant Shannon but not Chao1. Increased alpha diversity in high weight group signifying more but not necessarily different ASVs in high weight group
+anova_results <- aov(Shannon ~ Exposure_to_antibiotics_during_visit+Weight_group, data = diversity_Alpha_with_M); summary(anova_results) #p = 0.0351
+anova_results <- aov(Chao ~ Exposure_to_antibiotics_during_visit+Weight_group, data = diversity_Alpha_with_M); summary(anova_results) #p = 0.297
+
+#Stats for figure 1B
+anova_results <- aov(Shannon ~ Weight_group, data = diversity_Alpha_with_M %>% filter(Exposure_to_antibiotics_during_visit == "Given_antibiotics")); summary(anova_results) #p = 0.0225
+anova_results <- aov(Chao ~ Weight_group, data = diversity_Alpha_with_M %>% filter(Exposure_to_antibiotics_during_visit == "Given_antibiotics")); summary(anova_results) #p = 0.247
+
+p <- split_violin_plotly(diversity_df = diversity_Alpha_with_M %>% filter(Exposure_to_antibiotics_during_visit == "Given_antibiotics"), shared_axis = "Blank", split_axis = "Weight_group", flipped = TRUE);p
+save_image(p = p, file = "Fig_1B_alpha_diversity_Weight_group_Shannon_significant_only_exposed.png", width = 8, height=8)
+```
+
+### Number of MDROs {#Number_of_MDROs}
+
+There is a significant inverse relationship between the number of MDROs detected per subject and Chao1 richness (This significance is eliminated when accounting for antibiotic exposure, but number of MDROs is closely tied to antibiotic exposure (i.e., all patients who had detected MDRO infections were treated with antibiotics). These results may imply that a polymicrobial MDRO infection either leads to a decrease in unique bacteria or a decrease in unique bacteria makes one more susceptible to polymicrobial MDRO infection.
+
+```{r Alpha_diversity_Number_of_MDROs, fig.width=8}
+
+#number of MDROs significantly decreases estimated richness only when exposure to antibiotics not considered. Likely because the two are correlated
+lm_result <- lm(Chao~ Num_MDROs, data = diversity_Alpha_with_M); summary(lm_result) #p = 0.0255 with adjusted R=0.09002
+lm_result <- lm(Chao~ Exposure_to_antibiotics_during_visit + Num_MDROs, data = diversity_Alpha_with_M); summary(lm_result) #p=0.10426 with R=0.2575
+#wilcox test between number of MDROs and exposure to antibiotics
+wilcox.test(x = diversity_Alpha_with_M$Num_MDROs, y = as.numeric(as.factor(diversity_Alpha_with_M$Exposure_to_antibiotics_during_visit)))# W =733 with p = 0.01081
+
+#only subjects who had MDROs were given antibiotics
+ggboxplot(diversity_Alpha_with_M, 
+          x = "Exposure_to_antibiotics_during_visit", 
+          y = "Num_MDROs", 
+          color = "Exposure_to_antibiotics_during_visit", 
+          palette = c("#00AFBB", "#E7B800"),
+          ylab = "Number of MDROs", 
+          xlab = "Exposure to antibiotics during visit")
+
+#Shannon diversity not impacted by number of MDROs
+lm_result <- lm(Shannon~ Num_MDROs, data = diversity_Alpha_with_M); summary(lm_result) #p=0.294 with R=0.002923
+
+#Shannon diversity as a function of number of detected MDROs
+fig <- plot_ly(
+  data = diversity_Alpha_with_M,
+  type = "scatter",
+  mode = "markers",
+  x = ~Num_MDROs,
+  y = ~Shannon,
+  color = "black",colors = "black",
+  hovertext = ~paste("Subject:", diversity_Alpha_with_M$Patient_number)
+) %>% add_lines(
+    x = ~Num_MDROs,
+    y = fitted(lm_result),
+    line=
+      list(color = "black")
+    ) %>% layout(
+    yaxis = list(
+        zeroline = F  
+    )
+)
+
+lm_result <- lm(Chao~ Num_MDROs, data = diversity_Alpha_with_M); summary(lm_result) #p = 0.0255 with adjusted R=0.09002
+
+#Chao1 richness as a function of number of detected MDROs
+fig2 <- plot_ly(
+  data = diversity_Alpha_with_M,
+  type = "scatter",
+  mode = "markers",
+  x = ~Num_MDROs,
+  y = ~Chao,
+  color = "black",colors = "black",
+  hovertext = ~paste("Subject:", diversity_Alpha_with_M$Patient_number)) %>% add_lines(
+    x = ~Num_MDROs,
+    y = fitted(lm_result),
+    line=
+      list(color = "black")
+    ) %>% layout(
+    yaxis = list(
+        zeroline = F  
+    )
+  )
+p <- subplot(fig, fig2, shareY = FALSE, titleX = TRUE, titleY = TRUE, margin = 0.05);p
+
+save_image(p, file = "Fig_2A_number_of_MDROs_alpha.png", width = 8, height = 8)
+
+```
+
+### MDRO status {#MDRO_status}
+
+Taking into account exposure to antibiotics during visit, MDRO infection status as a whole does not affect alpha diversity. However, the impacts of MDRO infections are likely heterogeneous and dependent on the specific infecting MDRO.
+
+```{r split_violin_MDRO, warning=FALSE, fig.width=8}
+diversity_Alpha_MDRO <- diversity_Alpha_with_M %>% filter(MDRO_status == "Positive" | MDRO_status == "Negative")
+
+#Shannon not affected by MDRO status regardless of whether exposure to antibiotics is taken into account
+anova_results <- aov(Shannon ~ Exposure_to_antibiotics_during_visit + MDRO_status, data = diversity_Alpha_MDRO); summary(anova_results) #p = 0.9137
+anova_results <- aov(Shannon ~ MDRO_status, data = diversity_Alpha_MDRO); summary(anova_results)#p = 0.463
+
+#Chao1 almost significantly affected by MDRO status when exposure to antibiotics not taken into account
+anova_results <- aov(Chao ~ Exposure_to_antibiotics_during_visit + MDRO_status, data = diversity_Alpha_MDRO); summary(anova_results) #p = 0.362
+anova_results <- aov(Chao ~ MDRO_status, data = diversity_Alpha_MDRO); summary(anova_results) #p = 0.0687
+```
+
+### MDRO *E. coli* infection {#MDRO_E_coli}
+
+One of the most prevalent MDROs in the cohort was *E. coli*. Intriguingly,  MDRO *E.coli* infection significantly impacted Chao1 richness in the high weight group while accounting for exposure to antibiotics and the impact on Shannon alpha diversity was almost significant.
+
+```{r E.coli_alpha_highW, warning=FALSE, fig.width=8}
+
+diversity_Alpha_MDRO$Ecoli <- diversity_Alpha_MDRO$Patient_number %in% META_MDRO$Patient_number[META_MDRO$MDRO_name == "Escherichia coli"]
+
+p <- split_violin_plotly(diversity_df = diversity_Alpha_MDRO %>% filter(Weight_group == "High Weight")%>% filter(MDRO_status == "Negative" | MDRO_status == "Positive" & Ecoli == TRUE), shared_axis = "Blank", split_axis = "MDRO_status", META2 = META_MDRO_wide_recoded);p
+save_image(p = p, file = "Fig_2B_Ecoli_high_weight_alpha.png", width = 8, height = 8)
+
+anova_results <- aov(Chao ~ Exposure_to_antibiotics_during_visit+Ecoli, data = diversity_Alpha_MDRO%>% filter(Weight_group == "High Weight") %>% filter(MDRO_status == "Negative" | MDRO_status == "Positive" & Ecoli == TRUE)); summary(anova_results) #p = 0.04197
+
+anova_results <- aov(Shannon ~ Exposure_to_antibiotics_during_visit+Ecoli, data = diversity_Alpha_MDRO%>% filter(Weight_group == "High Weight") %>% filter(MDRO_status == "Negative" | MDRO_status == "Positive" & Ecoli == TRUE)); summary(anova_results) #p = 0.0776
+```
+
+However, significant effects did not appear in the low weight group.
+
+```{r E.coli_alpha_lowW, warning=FALSE, fig.width=8}
+p <- split_violin_plotly(diversity_df = diversity_Alpha_MDRO %>% filter(Weight_group == "Low Weight")%>% filter(MDRO_status == "Negative" | MDRO_status == "Positive" & Ecoli == TRUE), shared_axis = "Blank", split_axis = "MDRO_status", META2 = META_MDRO_wide_recoded);p
+save_image(p = p, file = "Fig_S2_Ecoli_low_weight_alpha.png", width = 8, height = 8)
+
+anova_results <- aov(Chao ~ Exposure_to_antibiotics_during_visit+ Ecoli, data = diversity_Alpha_MDRO%>% filter(Weight_group == "Low Weight") %>% filter(MDRO_status == "Negative" | MDRO_status == "Positive" & Ecoli == TRUE)); summary(anova_results)#p = 0.7115
+
+anova_results <- aov(Shannon ~ Exposure_to_antibiotics_during_visit+ Ecoli, data = diversity_Alpha_MDRO%>% filter(Weight_group == "Low Weight") %>% filter(MDRO_status == "Negative" | MDRO_status == "Positive" & Ecoli == TRUE)); summary(anova_results)#p = 0.8310
+```
+
+### Antibiotic classes {#Antibiotic_classes}
+
+While exposure to antibiotics as a whole had the most significant impact on alpha diversity, vancomycin and carbapenem antibiotic classes demonstrated the strongest impact on alpha diversity with body weight dependent decreases.
+
+```{r antibiotic_class_analysis}
+
+#Only Carbapenem in high weight group significantly impacts Shannon alpha diversity
+LW_abx_model <- glm(Shannon ~ Vancomycin+Cephalosporin+Floroquinolone+Carbapenem+Tetracycline+Penicillin+Aminoglycoside+Monobactam+Macrolide, data = diversity_Alpha_with_M %>% filter(Weight_group == "Low Weight"));summary(LW_abx_model)
+HW_abx_model <- glm(Shannon ~ Vancomycin+ Cephalosporin+Floroquinolone+Carbapenem+Tetracycline+Penicillin+Aminoglycoside+Monobactam+Macrolide, data = diversity_Alpha_with_M %>% filter(Weight_group == "High Weight"));summary(HW_abx_model)
+
+#Vancomycin and Carbapenems significantly decrease Chao1 diversity in low weight group but not high weight group.
+LW_abx_model <- glm(Chao ~ Vancomycin+Cephalosporin+Floroquinolone+Carbapenem+Tetracycline+Penicillin+Aminoglycoside+Monobactam+Macrolide, data = diversity_Alpha_with_M %>% filter(Weight_group == "Low Weight"));summary(LW_abx_model)
+HW_abx_model <- glm(Chao ~ Vancomycin+ Cephalosporin+Floroquinolone+Carbapenem+Tetracycline+Penicillin+Aminoglycoside+Monobactam+Macrolide, data = diversity_Alpha_with_M %>% filter(Weight_group == "High Weight"));summary(HW_abx_model)
+
+#2d versions
+plot_ly(data = diversity_Alpha_with_M, x=~Carbapenem, y=~Chao, color = ~Weight_group, type = "scatter", colors = c("red", "blue"))
+plot_ly(data = diversity_Alpha_with_M, x=~Vancomycin, y=~Chao, color = ~Weight_group, type = "scatter", colors = c("red", "blue"))
+
+#only significant predictors
+abx_model <- glm(Chao ~ Vancomycin+Carbapenem, data = diversity_Alpha_with_M); summary(abx_model)
+HW_abx_model <- glm(Chao ~ Vancomycin+Carbapenem, data = diversity_Alpha_with_M %>% filter(Weight_group == "High Weight")); summary(HW_abx_model)
+LW_abx_model <- glm(Chao ~ Vancomycin+Carbapenem, data = diversity_Alpha_with_M %>% filter(Weight_group == "Low Weight")) ;summary(LW_abx_model)
+
+#coefficients of the model
+HW_cf.mod <- coef(HW_abx_model)
+LW_cf.mod <- coef(LW_abx_model)
+### Calculate z on a grid of x-y values
+xseq <- seq(0,2,length.out=25)
+yseq <- seq(0,1,length.out=25)
+Hz <- t(outer(xseq, yseq, function(x,y) HW_cf.mod[1]+HW_cf.mod[2]*x+HW_cf.mod[3]*y))
+Lz <- t(outer(xseq, yseq, function(x,y) LW_cf.mod[1]+LW_cf.mod[2]*x+LW_cf.mod[3]*y))
+
+Hz_col <- Hz*0
+Lz_col <- Lz*0+1
+
+#saved as Chao1 richness Vancomycin Carbapenem planes
+p <- plot_ly(colors = c("red","blue")) %>% add_surface(
+  x =~xseq,
+  y=~yseq, 
+  z=~Hz,
+  opacity = 0.7,
+  surfacecolor =Hz_col,
+  cauto = F,
+  cmax=1,
+  cmin=0,
+  showscale = FALSE,
+  legendgroup= "High Weight",
+  name= "High Weight"
+) %>% add_surface(
+  x=~xseq, 
+  y=~yseq, 
+  z=~Lz,
+  opacity = 0.7,
+  surfacecolor = Lz_col,
+  cauto = F,
+  cmax=1,
+  cmin=0,
+  showscale = FALSE,
+  legendgroup = "Low Weight",
+  name= "Low Weight"
+) %>% add_trace(
+  data = diversity_Alpha_with_M, 
+  x=~Carbapenem, 
+  y=~Vancomycin, 
+  z=~Chao, 
+  color = ~Weight_group, 
+  type = "scatter3d", 
+  mode = "markers",
+  legendgroup = ~Weight_group
+  ) %>% layout(
+    scene = list(
+      xaxis = list(
+        title = "Carbapenem",
+        tickvals = c(0,1,2)
+      ),
+      yaxis = list(
+        title = "Vancomycin",
+        tickvals = c(0,1)
+      ),
+      zaxis = list(
+        title = "Chao1"
+      )
+    )
+  );p
+save_image(p, file = "Fig_1C_Antibiotic_planes_alpha_diversity.png")
+
+diversity_Alpha_with_M$Carbapenem_01 <- case_when(
+  diversity_Alpha_with_M$Carbapenem > 0 ~ "Treated",
+  TRUE ~ "Not treated"
+)
+diversity_Alpha_with_M$Vancomycin_01 <- case_when(
+  diversity_Alpha_with_M$Vancomycin > 0 ~ "Treated",
+  TRUE ~ "Not treated"
+)
+```
+
+## LEfSe {#LEfSe}
+
+ASVs enriched in vancomycin and carbapenem treated subjects.
+
+```{r LEfSe}
+
+#LEfSe to see which ASVs were enriched after antibiotic treatment
+Abx_SE <- SummarizedExperiment(assays = ASV_rare , rowData = TAX_rare, colData = diversity_Alpha_with_M)
+
+#Fig_1D_Vancomycin_LEfSe.pdf (saved as pdf 5x2)
+Abx_lefse <- lefse(expr = Abx_SE, groupCol = "Vancomycin_01")
+tax <- TAX_rare %>% filter(rownames(.) %in% Abx_lefse$Names);tax <- tax[Abx_lefse$Names,];tax <- tax$Genus
+Abx_lefse$Names <- paste0(Abx_lefse$Names, "-", tax)
+lefse_plot(Abx_lefse, colors = c("forestgreen", "red"))
+
+
+#Fig_1D_Carbapenem_LEfSe (saved as pdf 5x2)
+Abx_lefse <- lefse(expr = Abx_SE, groupCol = "Carbapenem_01")
+tax <- TAX_rare %>% filter(rownames(.) %in% Abx_lefse$Names);tax <- tax[Abx_lefse$Names,];tax <- tax$Genus
+Abx_lefse$Names <- paste0(Abx_lefse$Names, "-", tax)
+lefse_plot(Abx_lefse, colors = c("forestgreen", "red"))
+
+```
+
+## Cohort demographics {#Cohort_demographics}
+
+```{r cohort_demographics, warning=FALSE}
+
+META_demographics <- META
+
+META_demographics$Race <- case_when(grepl("1", META_demographics$Race) ~ "White",
+                                   grepl("2", META_demographics$Race) ~ "Black/African American",
+                                   grepl("3", META_demographics$Race) ~ "Asian",
+                                   grepl("4", META_demographics$Race) ~ "Other", TRUE ~ META_demographics$Race)
+
+META_demographics$Smoking <- case_when(grepl("0", META_demographics$Smoking) ~ "No history",
+                                       grepl("1", META_demographics$Smoking) ~ "Past history",
+                                       grepl("2", META_demographics$Smoking) ~ "Current smoker",
+                                       grepl("unk", META_demographics$Smoking) ~ "Unknown",
+                                       TRUE ~ META_demographics$Smoking)
+META_demographics$Smoking <- factor(META_demographics$Smoking, levels = unique(META_demographics$Smoking))
+
+META_demographics$Alcohol <- case_when(grepl("0", META_demographics$Alcohol) ~ "No history",
+                                       grepl("1", META_demographics$Alcohol) ~ "Past history",
+                                       grepl("2", META_demographics$Alcohol) ~ "Current drinker",
+                                       grepl("unk", META_demographics$Alcohol) ~ "Unknown",
+                                       TRUE ~ META_demographics$Alcohol)
+META_demographics$Alcohol <- factor(META_demographics$Alcohol, levels = unique(META_demographics$Alcohol))
+
+META_demographics$MDRO <- case_when(grepl("12", META_demographics$MDRO_organism) ~ "Negative",
+                                             grepl("13", META_demographics$MDRO_organism) ~ "No screen for MDRO",
+                                             TRUE ~ "Positive")
+META_demographics$MDRO <- factor(META_demographics$MDRO, levels = unique(META_demographics$MDRO))
+
+META_demographics$Exposure_to_antibiotics_during_visit <- case_when(grepl("No", META_demographics$Exposure_to_antibiotics_during_visit) ~ "No",
+                                       grepl("Given", META_demographics$Exposure_to_antibiotics_during_visit) ~ "Yes")
+
+META_demographics$COVID <- case_when(grepl("Negative", META_demographics$COVID19_Pos) ~ "Negative",
+                                       grepl("Positive", META_demographics$COVID19_Pos) ~ "Positive")
+META_demographics$C_diff <- case_when(grepl("negative", META_demographics$C_diff) ~ "Negative",
+                                       grepl("positive", META_demographics$C_diff) ~ "Positive")
+META_demographics$Mortality_90_day <- case_when(grepl("0", META_demographics$Mortality_90_day) ~ "No",
+                                       grepl("1", META_demographics$Mortality_90_day) ~ "Yes",
+                                       TRUE ~ "NA")
+
+# Specify explanatory variables of interest
+explanatory <- c("Age", "Weight_kg", "BMI", "Length_of_stay","Sex",
+                "Race", "Smoking", "Alcohol", "Exposure_to_antibiotics_during_visit", "COVID", "C_diff", "MDRO",  "Mortality_90_day")
+
+demographics <- META_demographics %>% 
+  finalfit::summary_factorlist("Case_Control", explanatory,
+                     p=TRUE, na_include=TRUE)
+
+knitr::kable(demographics, format = "simple")
+
+write.csv(demographics, file = "Table_1_Cohort_Demographics.csv")
+```
