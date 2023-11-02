@@ -1,7 +1,7 @@
 ---
 title: "Gut microbiome alpha diversity decreases in relation to body weight, antibiotic exposure, and infection with multidrug-resistant organisms"
 author: "Jonathan Panzer"
-date: "3/9/23"
+date: "11/2/23"
 output:
   html_document:
     keep_md: true
@@ -42,7 +42,7 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ## Introduction {#Introduction}
 
-This GMADD github repository contains all code used to process and analyze data and metadata associated with the brief report published in the journal *Open Forum Infectious Diseases* (DOI:___). The following abstract summarizes the results of the brief report:
+This GMADD github repository contains all code used to process and analyze data and metadata associated with the brief report published in the journal *American Journal of Infection Control* (DOI:___). The following abstract summarizes the results of the brief report:
 
 Abstract:
 16S rRNA gene sequencing of 45 fecal samples revealed that subjects with multiple multidrug-resistant organisms (MDROs), subjects weighing greater than 80kg infected with MDRO E. coli, and subjects weighing less than 80kg with exposure to vancomycin and carbapenem antibiotics during hospitalization had significantly decreased gut microbiome richness.  
@@ -243,6 +243,7 @@ devtools::install_version("finalfit", version = "1.0.6")
 devtools::install_version("lefser", version = "1.0.0")
 devtools::install_version("ggpubr", version = "0.4.0")
 devtools::install_version("curl", version = "4.3.2")
+devtools::install_version("forcats", version = "0.5.1")
 ```
 
 ### Package Loading {#Package_Loading}
@@ -262,6 +263,7 @@ library(finalfit)
 library(lefser)
 library(ggpubr)
 library(curl)
+library(forcats)
 
 sessionInfo()
 ```
@@ -611,6 +613,98 @@ A_plotly <- subplot(nrows = 1, A_plotly_Shannon, A_plotly_Chao, shareX = F, shar
 }
 ```
 
+```{r beta_diversity_plotting_function}
+
+gg_beta_plotly <- function(ASV, META, TAX, META_col, taxa_on_rows = TRUE, col_palette = "Dark2", ASVs_to_plot, reverse_palette=FALSE){
+  
+  if(reverse_palette){
+      META[[META_col]] <- forcats::fct_rev(META[[META_col]])
+  }
+  
+  #transposes data so that taxa are on columns
+  if(taxa_on_rows){
+    ASV <- as.data.frame(t(ASV))
+  }
+  #uses the vegdist() function to calculate bray-curtis dissimilarity indices
+  bray_dist <- vegan::vegdist(ASV, method = "bray")
+  #uses the vegdist() function to calculate jaccard dissimilarity indices
+  jacc_dist <- vegan::vegdist(ASV, method = "jaccard")
+  #convert dissimilarity into coordinates
+  bray_pcoa <- ecodist::pco(bray_dist, negvals = "rm")
+  bray_df <- as.data.frame(bray_pcoa$vectors)
+  jacc_pcoa <- ecodist::pco(jacc_dist, negvals = "rm")
+  jacc_df <- as.data.frame(jacc_pcoa$vectors)
+  #calculates Relative Eigenvalues for axes 1 and 2
+  bray_axis1_rel_eigen <- round(100*bray_pcoa$values[1]/sum(bray_pcoa$values), digits = 2)
+  bray_axis2_rel_eigen <- round(100*bray_pcoa$values[2]/sum(bray_pcoa$values), digits = 2)
+  jacc_axis1_rel_eigen <- round(100*jacc_pcoa$values[1]/sum(jacc_pcoa$values), digits = 2)
+  jacc_axis2_rel_eigen <- round(100*jacc_pcoa$values[2]/sum(jacc_pcoa$values), digits = 2)
+  
+  #selects taxonomy for ASVs to plot
+  if(!missing(ASVs_to_plot)){
+    TAX_select <- TAX %>% dplyr::filter(rownames(.) %in% ASVs_to_plot)
+    bray_WAscores <- as.data.frame(vegan::wascores(x = bray_df, w = ASV))
+    bray_select <- bray_WAscores %>% dplyr::filter(rownames(.) %in% ASVs_to_plot)
+    bray_select$labels <- make.unique(TAX_select$Genus)
+    
+    jacc_WAscores <- as.data.frame(vegan::wascores(x = jacc_df, w = ASV))
+    jacc_select <- jacc_WAscores %>% dplyr::filter(rownames(.) %in% ASVs_to_plot)
+    jacc_select$labels <- make.unique(TAX_select$Genus)
+  }
+  
+  gp <- ggplot2::ggplot(bray_df, aes(x = V1, y = V2, color = META[[META_col]])) + 
+    ggplot2::scale_color_brewer(palette = col_palette)+ 
+    labs(color = META_col) + xlab(paste0("PC1 (", bray_axis1_rel_eigen, "%)")) + ylab(paste0("PC2 (", bray_axis2_rel_eigen, "%)")) +
+    ggplot2::geom_point() + 
+    ggplot2::stat_ellipse(level = .95)
+  bray_plotly <- plotly::ggplotly(gp)
+  
+    gp <- ggplot2::ggplot(jacc_df, aes(x = V1, y = V2, color = META[[META_col]])) + 
+    ggplot2::scale_color_brewer(palette = col_palette)+ 
+    labs(color = META_col) + xlab(paste0("PC1 (", jacc_axis1_rel_eigen, "%)")) + ylab(paste0("PC2 (", jacc_axis2_rel_eigen, "%)")) +
+    ggplot2::geom_point() + 
+    ggplot2::stat_ellipse(level = .95)
+  jacc_plotly <- plotly::ggplotly(gp)
+  
+  if(!missing(ASVs_to_plot)){
+  bray_plotly <- bray_plotly %>% plotly::add_trace(
+    data = bray_select,
+    type = "scatter",
+    mode = "markers+text",
+    name = "Weighted Average Genera",
+    x = ~V1,
+    y = ~V2,
+    text = bray_select$labels,
+    textposition = "top center",
+    marker = list(
+      color = "grey",
+      symbol = "diamond"
+    ), 
+    inherit = FALSE
+  )
+  jacc_plotly <- jacc_plotly %>% plotly::add_trace(
+    data = jacc_select,
+    type = "scatter",
+    mode = "markers+text",
+    name = "Weighted Average Genera",
+    x = ~V1,
+    y = ~V2,
+    text = jacc_select$labels,
+    textposition = "top center",
+    marker = list(
+      color = "grey",
+      symbol = "diamond"
+    ), 
+    inherit = FALSE
+  )
+  }
+  
+  listly <- list(bray = bray_plotly, jacc = jacc_plotly)
+  return(listly)
+}
+
+```
+
 ## Data Processing {#Data_processing}
 
 Data processing begins by downloading data and metadata from the [github repository](https://github.com/jp589/GMADD/). Then the data are cleaned and sorted for ease of analysis.
@@ -645,7 +739,7 @@ meta_key <- read.xlsx(xlsxFile = "GMADD_study_metadata.xlsx", sheet = 2, startRo
 
 
 #substitutes values based on key
-meta$Place_of_admission <- case_when(
+meta$Place_of_admission <- dplyr::case_when(
     meta$Place_of_admission == "1" ~ "Home",
     meta$Place_of_admission == "2" ~ "Nursing Home",
     meta$Place_of_admission == "3" ~ "Subacute Rehab",
@@ -654,37 +748,37 @@ meta$Place_of_admission <- case_when(
     meta$Place_of_admission == "NA" ~ "NA"
 )
 #substitutes values based on key
-meta$MDRO_status <- case_when(
+meta$MDRO_status <- dplyr::case_when(
   meta$MDRO_organism == "12" ~ "Negative",
   meta$MDRO_organism == "13" ~ "Negative",
   meta$MDRO_organism == "NA" ~ "NA",
   TRUE ~ "Positive"
 )
 #substitutes values based on key
-meta$C_diff <- case_when(
+meta$C_diff <- dplyr::case_when(
   meta$C_diff == "1" ~ "C. diff positive",
   meta$C_diff == "0" ~ "C. diff negative",
   TRUE ~ "NA"
 )
 #substitutes values based on key
-meta$C_diff_hist <- case_when(
+meta$C_diff_hist <- dplyr::case_when(
   meta$C_diff_prior_history == "1" ~ "Prior C.diff",
   meta$C_diff_prior_history == "0" ~ "No Prior C.diff",
   TRUE ~ "NA"
 )
 #substitutes values based on key
-meta$COVID19_Pos <- case_when(
+meta$COVID19_Pos <- dplyr::case_when(
   meta$COVID19_Pos == "0" ~ "COVID19 Negative",
   meta$COVID19_Pos == "1" ~ "COVID19 Positive",
   TRUE ~ "NA"
 )
 #substitutes values based on key
-meta$Exposure_to_antibiotics_during_visit <- case_when(
+meta$Exposure_to_antibiotics_during_visit <- dplyr::case_when(
   meta$Exposure_to_antibiotics_during_visit == "0" ~ "No_antibiotics",
   meta$Exposure_to_antibiotics_during_visit == "1" ~ "Given_antibiotics"
 )
 #creates `Patient_Status` column to summarize whether patients had COVID19, MDRO, or C. difficile infections in combination or in isolation.
-meta$Patient_Status <- case_when(
+meta$Patient_Status <- dplyr::case_when(
   meta$COVID19_Pos == "COVID19 Positive" & meta$MDRO_status == "Positive" & meta$C_diff == "C. diff positive" ~ "COVID19/MDRO/Cdiff",
   meta$COVID19_Pos == "COVID19 Positive" & meta$MDRO_status == "Positive" & meta$C_diff == "C. diff negative" ~ "COVID19/MDRO",
   meta$COVID19_Pos == "COVID19 Positive" & meta$MDRO_status == "Negative" & meta$C_diff == "C. diff positive" ~ "COVID19/Cdiff",
@@ -695,13 +789,13 @@ meta$Patient_Status <- case_when(
   meta$COVID19_Pos == "COVID19 Negative" & meta$MDRO_status == "Negative" & meta$C_diff == "C. diff negative" ~ "Control", TRUE ~ "Blank")
 #divides subjects into weight groups with the split at 80kg
 meta$Weight_kg <- as.numeric(meta$Weight_kg);split_weight <- 80
-meta$Weight_group <- case_when(
+meta$Weight_group <- dplyr::case_when(
   meta$Weight_kg > split_weight ~ "High Weight",
   meta$Weight_kg < split_weight ~ "Low Weight"
 )
 
 #substitutes values based on key
-meta$Sex <- case_when(grepl("0", meta$Sex) ~ "Male",
+meta$Sex <- dplyr::case_when(grepl("0", meta$Sex) ~ "Male",
                       grepl("1", meta$Sex) ~ "Female")
 
 #move Case_Control to end
@@ -726,7 +820,7 @@ META$Age <- as.numeric(META$Age);META$Weight_kg <- as.numeric(META$Weight_kg);ME
 Removes ASVs which were more prevalent in extraction blanks than in fecal samples.
 
 ```{r DECONTAM}
-META$DECONTAM_type <- case_when(
+META$DECONTAM_type <- dplyr::case_when(
   META$Case_Control == "Case" ~ "sample",
   META$Case_Control == "Control" ~ "sample",
   META$Case_Control == "Blank" ~ "control"
@@ -798,7 +892,7 @@ for (i in 1:length(unique(META_MDRO$Patient_number))){
   }
 }
 #recodes 13 to 12 since both indicate that there were no MDROs
-META_MDRO_wide$MDRO1 <- case_when(
+META_MDRO_wide$MDRO1 <- dplyr::case_when(
   META_MDRO_wide$MDRO1 == 13 ~ 12,
   TRUE ~ META_MDRO_wide$MDRO1
 )
@@ -813,12 +907,12 @@ names(MDRO_key_vec) <- MDRO_key$V1; MDRO_key_vec[12] <- "NA"
 #instantiates META_MDRO_wide_recoded
 META_MDRO_wide_recoded <- META_MDRO_wide
 #Recodes by key vector
-META_MDRO_wide_recoded$MDRO1 <- recode(META_MDRO_wide$MDRO1, !!!MDRO_key_vec)
-META_MDRO_wide_recoded$MDRO2 <- recode(META_MDRO_wide$MDRO2, !!!MDRO_key_vec)
-META_MDRO_wide_recoded$MDRO3 <- recode(META_MDRO_wide$MDRO3, !!!MDRO_key_vec)
-META_MDRO_wide_recoded$MDRO4 <- recode(META_MDRO_wide$MDRO4, !!!MDRO_key_vec)
+META_MDRO_wide_recoded$MDRO1 <- dplyr::recode(META_MDRO_wide$MDRO1, !!!MDRO_key_vec)
+META_MDRO_wide_recoded$MDRO2 <- dplyr::recode(META_MDRO_wide$MDRO2, !!!MDRO_key_vec)
+META_MDRO_wide_recoded$MDRO3 <- dplyr::recode(META_MDRO_wide$MDRO3, !!!MDRO_key_vec)
+META_MDRO_wide_recoded$MDRO4 <- dplyr::recode(META_MDRO_wide$MDRO4, !!!MDRO_key_vec)
 
-META_MDRO$MDRO_name <- recode(META_MDRO$MDRO, !!!MDRO_key_vec)
+META_MDRO$MDRO_name <- dplyr::recode(META_MDRO$MDRO, !!!MDRO_key_vec)
 
 #converts `META_MDRO_wide` to number of MDRO per subject
 META_MDRO_wide$Num_MDROs <- as.numeric(table(META_MDRO$Patient_number)[unique(META_MDRO$Patient_number)]) - (META_MDRO_wide$MDRO1 == 12)*1
@@ -917,6 +1011,34 @@ anova_results <- aov(Chao ~ Weight_group, data = diversity_Alpha_with_M %>% filt
 
 p <- split_violin_plotly(diversity_df = diversity_Alpha_with_M %>% filter(Exposure_to_antibiotics_during_visit == "Given_antibiotics"), shared_axis = "Blank", split_axis = "Weight_group", flipped = TRUE);p
 save_image(p = p, file = "Fig_1B_alpha_diversity_Weight_group_Shannon_significant_only_exposed.png", width = 8, height=8)
+```
+
+Body weight beta diversity analyses and LEfSe
+
+```{r beta_weight_group, fig.width=8}
+
+beta_plots <- gg_beta_plotly(ASV = ASV_rare, META = META, TAX = TAX_rare, META_col = "Weight_group", taxa_on_rows = TRUE, col_palette = "Dark2", reverse_palette = TRUE)
+
+p <- plotly::subplot(beta_plots$bray, beta_plots$jacc, shareY = FALSE, shareX = FALSE, titleX = TRUE, titleY = TRUE, margin = 0.05) %>% plotly::layout(title = "Bray-Curtis PCoA /  Jaccard PCoA")
+save_image(p = p, file = "Fig_S2_Beta_Diversity_by_Weight_Group.png", width = 1000, height = 600)
+
+perm <- how(nperm = 999)
+set.seed(1); adonis <- adonis2(formula = t(ASV_rare) ~ Exposure_to_antibiotics_during_visit + Weight_group, data = META, method = "bray", permutations = perm);adonis #Weight_group F = 1.93 p = 0.008
+set.seed(1); adonis <- adonis2(formula = t(ASV_rare) ~ Exposure_to_antibiotics_during_visit + Weight_group, data = META, method = "jaccard", permutations = perm);adonis #Weight_group F = 1.66 p = 0.023
+
+#non-significant dispersion for bray-curtis
+anova(betadisper(vegdist(t(ASV_rare)), group = META$Weight_group)) #F=1.9061, p = 0.1745
+#non-significant dispersion for jaccard
+anova(betadisper(vegdist(t(ASV_rare), method = "jaccard"), group = META$Weight_group)) #F = 1.872, p = 0.1784
+
+#LEfSe to see which ASVs were enriched in each weight group
+SE <- SummarizedExperiment(assays = ASV_rare , rowData = TAX_rare, colData = META)
+
+#Fig_1D_Vancomycin_LEfSe.pdf (saved as pdf 5x2)
+WG_lefse <- lefse(expr = SE, groupCol = "Weight_group")
+WG_tax <- TAX_rare %>% filter(rownames(.) %in% WG_lefse$Names);WG_tax <- WG_tax[WG_lefse$Names,];WG_tax <- WG_tax$Genus
+WG_lefse$Names <- paste0(WG_lefse$Names, "-", WG_tax)
+lefse_plot(WG_lefse, colors = c("red", "forestgreen"))
 ```
 
 ### Number of MDROs {#Number_of_MDROs}
@@ -1025,7 +1147,7 @@ However, significant effects did not appear in the low weight group.
 
 ```{r E.coli_alpha_lowW, warning=FALSE, fig.width=8}
 p <- split_violin_plotly(diversity_df = diversity_Alpha_MDRO %>% filter(Weight_group == "Low Weight")%>% filter(MDRO_status == "Negative" | MDRO_status == "Positive" & Ecoli == TRUE), shared_axis = "Blank", split_axis = "MDRO_status", META2 = META_MDRO_wide_recoded);p
-save_image(p = p, file = "Fig_S2_Ecoli_low_weight_alpha.png", width = 8, height = 8)
+save_image(p = p, file = "Fig_S4_Ecoli_low_weight_alpha.png", width = 8, height = 8)
 
 anova_results <- aov(Chao ~ Exposure_to_antibiotics_during_visit+ Ecoli, data = diversity_Alpha_MDRO%>% filter(Weight_group == "Low Weight") %>% filter(MDRO_status == "Negative" | MDRO_status == "Positive" & Ecoli == TRUE)); summary(anova_results)#p = 0.7115
 
@@ -1118,11 +1240,11 @@ p <- plot_ly(colors = c("red","blue")) %>% add_surface(
   );p
 save_image(p, file = "Fig_1C_Antibiotic_planes_alpha_diversity.png")
 
-diversity_Alpha_with_M$Carbapenem_01 <- case_when(
+diversity_Alpha_with_M$Carbapenem_01 <- dplyr::case_when(
   diversity_Alpha_with_M$Carbapenem > 0 ~ "Treated",
   TRUE ~ "Not treated"
 )
-diversity_Alpha_with_M$Vancomycin_01 <- case_when(
+diversity_Alpha_with_M$Vancomycin_01 <- dplyr::case_when(
   diversity_Alpha_with_M$Vancomycin > 0 ~ "Treated",
   TRUE ~ "Not treated"
 )
@@ -1158,38 +1280,38 @@ lefse_plot(Abx_lefse, colors = c("forestgreen", "red"))
 
 META_demographics <- META
 
-META_demographics$Race <- case_when(grepl("1", META_demographics$Race) ~ "White",
+META_demographics$Race <- dplyr::case_when(grepl("1", META_demographics$Race) ~ "White",
                                    grepl("2", META_demographics$Race) ~ "Black/African American",
                                    grepl("3", META_demographics$Race) ~ "Asian",
                                    grepl("4", META_demographics$Race) ~ "Other", TRUE ~ META_demographics$Race)
 
-META_demographics$Smoking <- case_when(grepl("0", META_demographics$Smoking) ~ "No history",
+META_demographics$Smoking <- dplyr::case_when(grepl("0", META_demographics$Smoking) ~ "No history",
                                        grepl("1", META_demographics$Smoking) ~ "Past history",
                                        grepl("2", META_demographics$Smoking) ~ "Current smoker",
                                        grepl("unk", META_demographics$Smoking) ~ "Unknown",
                                        TRUE ~ META_demographics$Smoking)
 META_demographics$Smoking <- factor(META_demographics$Smoking, levels = unique(META_demographics$Smoking))
 
-META_demographics$Alcohol <- case_when(grepl("0", META_demographics$Alcohol) ~ "No history",
+META_demographics$Alcohol <- dplyr::case_when(grepl("0", META_demographics$Alcohol) ~ "No history",
                                        grepl("1", META_demographics$Alcohol) ~ "Past history",
                                        grepl("2", META_demographics$Alcohol) ~ "Current drinker",
                                        grepl("unk", META_demographics$Alcohol) ~ "Unknown",
                                        TRUE ~ META_demographics$Alcohol)
 META_demographics$Alcohol <- factor(META_demographics$Alcohol, levels = unique(META_demographics$Alcohol))
 
-META_demographics$MDRO <- case_when(grepl("12", META_demographics$MDRO_organism) ~ "Negative",
+META_demographics$MDRO <- dplyr::case_when(grepl("12", META_demographics$MDRO_organism) ~ "Negative",
                                              grepl("13", META_demographics$MDRO_organism) ~ "No screen for MDRO",
                                              TRUE ~ "Positive")
 META_demographics$MDRO <- factor(META_demographics$MDRO, levels = unique(META_demographics$MDRO))
 
-META_demographics$Exposure_to_antibiotics_during_visit <- case_when(grepl("No", META_demographics$Exposure_to_antibiotics_during_visit) ~ "No",
+META_demographics$Exposure_to_antibiotics_during_visit <- dplyr::case_when(grepl("No", META_demographics$Exposure_to_antibiotics_during_visit) ~ "No",
                                        grepl("Given", META_demographics$Exposure_to_antibiotics_during_visit) ~ "Yes")
 
-META_demographics$COVID <- case_when(grepl("Negative", META_demographics$COVID19_Pos) ~ "Negative",
+META_demographics$COVID <- dplyr::case_when(grepl("Negative", META_demographics$COVID19_Pos) ~ "Negative",
                                        grepl("Positive", META_demographics$COVID19_Pos) ~ "Positive")
-META_demographics$C_diff <- case_when(grepl("negative", META_demographics$C_diff) ~ "Negative",
+META_demographics$C_diff <- dplyr::case_when(grepl("negative", META_demographics$C_diff) ~ "Negative",
                                        grepl("positive", META_demographics$C_diff) ~ "Positive")
-META_demographics$Mortality_90_day <- case_when(grepl("0", META_demographics$Mortality_90_day) ~ "No",
+META_demographics$Mortality_90_day <- dplyr::case_when(grepl("0", META_demographics$Mortality_90_day) ~ "No",
                                        grepl("1", META_demographics$Mortality_90_day) ~ "Yes",
                                        TRUE ~ "NA")
 

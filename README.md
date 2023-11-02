@@ -1,10 +1,10 @@
 # Gut microbiome alpha diversity decreases in relation to body weight, antibiotic exposure, and infection with multidrug-resistant organisms
 ### Jonathan Panzer
-### 3/9/23
+### 11/2/23
 
 ## Introduction {#Introduction}
 
-This GMADD github repository contains all code used to process and analyze data and metadata associated with the brief report published in the journal *Open Forum Infectious Diseases* (DOI:___). The following abstract summarizes the results of the brief report:
+This GMADD github repository contains all code used to process and analyze data and metadata associated with the brief report published in the journal *American Journal of Infection Control* (DOI:___). The following abstract summarizes the results of the brief report:
 
 Abstract:
 16S rRNA gene sequencing of 45 fecal samples revealed that subjects with multiple multidrug-resistant organisms (MDROs), subjects weighing greater than 80kg infected with MDRO E. coli, and subjects weighing less than 80kg with exposure to vancomycin and carbapenem antibiotics during hospitalization had significantly decreased gut microbiome richness.  
