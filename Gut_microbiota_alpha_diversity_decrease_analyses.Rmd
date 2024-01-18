@@ -1,7 +1,7 @@
 ---
 title: "Gut microbiome alpha diversity decreases in relation to body weight, antibiotic exposure, and infection with multidrug-resistant organisms"
 author: "Jonathan Panzer"
-date: "11/2/23"
+date: "1/24"
 output:
   html_document:
     keep_md: true
@@ -15,44 +15,58 @@ knitr::opts_chunk$set(echo = TRUE)
 
 # Table of Contents
 
-***
+------------------------------------------------------------------------
 
-1. [Introduction](#Introduction)
-2. [DADA2 Processing](#DADA2_processing)
-3. [Setup](#Setup)
-    * [Installation](#Installation)
-    * [Package Loading](#Package_loading)
-4. [Function Definitions](#Function_definitions)
-5. [Data Processing](#Data_processing)
-    * [DECONTAM Processing](#DECONTAM_processing)
-    * [Normalization](#Normalization)
-    * [MDRO Infection Assessment](#MDRO_setup)
-    * [Cohort Body Weight Distribution](#Weight_distribution)
-6. [Alpha diversity](#Alpha_diversity)
-    * [Exposure to Antibiotics](#Antibiotic_exposure)
-    * [Body Weight](#Body_weight)
-    * [Number of MDROs](#Number_of_MDROs)
-    * [MDRO Status](#MDRO_status)
-    * [MDRO *E. coli* infection](#MDRO_E_coli)
-    * [Antibiotic Classes](#Antibiotic_classes)
-7. [LEfSe](#LEfSe)
-8. [Cohort Demographics](#Cohort_demographics)
+1.  [Introduction](#Introduction)
+2.  [DADA2 Processing](#DADA2_processing)
+3.  [Setup](#Setup)
+    -   [Installation](#Installation)
+    -   [Package Loading](#Package_loading)
+4.  [Function Definitions](#Function_definitions)
+5.  [Data Processing](#Data_processing)
+    -   [DECONTAM Processing](#DECONTAM_processing)
+    -   [Normalization](#Normalization)
+    -   [MDRO Infection Assessment](#MDRO_setup)
+    -   [Cohort Body Weight Distribution](#Weight_distribution)
+6.  [Alpha diversity](#Alpha_diversity)
+    -   [Exposure to Antibiotics](#Antibiotic_exposure)
+    -   [Body Weight](#Body_weight)
+    -   [Number of MDROs](#Number_of_MDROs)
+    -   [MDRO Status](#MDRO_status)
+    -   [MDRO *E. coli* infection](#MDRO_E_coli)
+    -   [Antibiotic Classes](#Antibiotic_classes)
+7.  [LEfSe](#LEfSe)
+8.  [Cohort Demographics](#Cohort_demographics)
 
-***
+------------------------------------------------------------------------
 
 ## Introduction {#Introduction}
 
-This GMADD github repository contains all code used to process and analyze data and metadata associated with the brief report published in the journal *American Journal of Infection Control* (DOI:___). The following abstract summarizes the results of the brief report:
+This GMADD github repository contains all code used to process and analyze data and metadata associated with the major article published in the journal *American Journal of Infection Control* (<https://doi.org/10.1016/j.ajic.2023.12.017>). The following abstract summarizes the results of the major article:
 
-Abstract:
-16S rRNA gene sequencing of 45 fecal samples revealed that subjects with multiple multidrug-resistant organisms (MDROs), subjects weighing greater than 80kg infected with MDRO E. coli, and subjects weighing less than 80kg with exposure to vancomycin and carbapenem antibiotics during hospitalization had significantly decreased gut microbiome richness.  
+### Abstract:
+
+#### Background
+
+The human gastrointestinal tract is home to a dense and diverse microbiome, predominated by bacteria. Despite the conservation of critical functionality across most individuals, the composition of the gut microbiome is highly individualized, leading to differential responses to perturbations such as oral antibiotics or multidrug-resistant organism (MDRO) infection. Herein, subject responses to these perturbations based on their body weight were evaluated.
+
+#### Methods
+
+Fecal samples were collected from 45 subjects at the Detroit Medical Center to evaluate the effects of perturbations on subjects' gut microbiome composition. Bacterial profiling was completed using 16S rRNA gene sequencing.
+
+#### Results
+
+Subjects with multiple MDROs, subjects weighing greater than 80 kg infected with MDRO *E coli*, and subjects weighing less than 80 kg with exposure to vancomycin and carbapenem antibiotics during hospitalization had significantly decreased gut microbiome richness.
+
+#### Conclusions
+
+Both administration of oral antibiotics and MDRO infections decreased gut microbiome alpha diversity, but the magnitude of these gut microbiome perturbations was body weight dependent.
 
 `.fastq.gz` files associated with this study have been uploaded to the [Sequence Read Archive](https://www.ncbi.nlm.nih.gov/sra) under the BioProject number PRJNA942348 and can be accessed with accession numbers SRR23752615-SRR23752663.
 
 The recommended way to replicate the code is to download `Gut_microbiota_alpha_diversity_decrease_analyses.rmd` and "knit" it in R Studio after [installing](#Installation) all required packages. While knitting, the `.rmd` will create a new `GMADD` directory in the current working directory. Then it will download and unzip the `GMADD` repository into this new directory. From there all analyses will be performed and figures/tables in their raw form will be generated.
 
 For those who wish to explore the R environment after analyses have been run, `GMADD.rda`, which is a snapshot of all R objects and functions after analyses were run, can be loaded into R studio.
-
 
 ## DADA2 Processing {#DADA2_processing}
 
@@ -185,13 +199,13 @@ pbPost("note", "Finished", "Saved")
 
 ## Setup {#Setup}
 
-This `.Rmd` document was successfully run with RStudio (Version 2022.07.1+554 "Spotted Wakerobin") and R (Version 4.0.3) to produce the figures and tables in Panzer et al. 2023 DOI:___. The version of RStudio can be checked under `Help` -> `About RStudio`. The version of R can be checked and changed under `Tools` -> `Global Options`. In the `General` side tab, there should be an R version listed near the top of the window, which can be changed, but this requires RStudio to restart before the version change takes effect. RStudio version 2022.07.1+554 is stable and can be downloaded [here](https://dailies.rstudio.com/version/2022.07.1+554/). R version 4.0.3 for Windows can be downloaded [here](https://cran.r-project.org/bin/windows/base/old/4.0.3/). Distributions for Linux and macOS can be downloaded [here](https://cran.r-project.org/).
+This `.Rmd` document was successfully run with RStudio (Version 2022.07.1+554 "Spotted Wakerobin") and R (Version 4.0.3) to produce the figures and tables in Panzer et al. 2023 DOI:\_\_\_. The version of RStudio can be checked under `Help` -\> `About RStudio`. The version of R can be checked and changed under `Tools` -\> `Global Options`. In the `General` side tab, there should be an R version listed near the top of the window, which can be changed, but this requires RStudio to restart before the version change takes effect. RStudio version 2022.07.1+554 is stable and can be downloaded [here](https://dailies.rstudio.com/version/2022.07.1+554/). R version 4.0.3 for Windows can be downloaded [here](https://cran.r-project.org/bin/windows/base/old/4.0.3/). Distributions for Linux and macOS can be downloaded [here](https://cran.r-project.org/).
 
 In addition to downloading `RStudio` and `R`, `Rtools` is also necessary since it is required for the installation of the R package `devtools`, which is used here to install older versions of packages and packages residing on github. `Rtools` version 4.0 for windows, which is compatible with `R/4.0.3`, can be downloaded [here](https://cran.r-project.org/bin/windows/Rtools/history.html). Be sure to leave the installation directory as the default `C:/Rtools/`.
 
 ### Installation {#Installation}
 
-These installation chunks are not evaluated during knitting, but installation of these packages is required before the document will successfully knit. Packages can be installed with several commands. The following chunk lists the code for the specific packages, which were used to successfully knit the document. If a package has never been installed before,  it may be necessary to first install the package with `BiocManager::install("package_name")`, and then use `devtools::install_version("package_name", version = "1.2.3")` for the exact version. If a package has been installed but was built under a different R 4.0 version, it may be necessary to re-install packages using `install.packages("package_name", force = TRUE)`, or to select a specific version with `devtools::install_version("package_name", version = "1.2.3")`. `install.packages("Package_Name")` is also another option.
+These installation chunks are not evaluated during knitting, but installation of these packages is required before the document will successfully knit. Packages can be installed with several commands. The following chunk lists the code for the specific packages, which were used to successfully knit the document. If a package has never been installed before, it may be necessary to first install the package with `BiocManager::install("package_name")`, and then use `devtools::install_version("package_name", version = "1.2.3")` for the exact version. If a package has been installed but was built under a different R 4.0 version, it may be necessary to re-install packages using `install.packages("package_name", force = TRUE)`, or to select a specific version with `devtools::install_version("package_name", version = "1.2.3")`. `install.packages("Package_Name")` is also another option.
 
 For exact versions please **skip updates to other packages when asked**.
 
@@ -995,7 +1009,6 @@ anova_results <- aov(Shannon ~ Exposure_to_antibiotics_during_visit, data = dive
 anova_results <- aov(Chao ~ Exposure_to_antibiotics_during_visit, data = diversity_Alpha_with_M); summary(anova_results) #p = 0.000552
 ```
 
-
 ### Body weight {#Body_weight}
 
 Body weight dependent alpha diversity decreases after antibiotic administration were observed.
@@ -1129,7 +1142,7 @@ anova_results <- aov(Chao ~ MDRO_status, data = diversity_Alpha_MDRO); summary(a
 
 ### MDRO *E. coli* infection {#MDRO_E_coli}
 
-One of the most prevalent MDROs in the cohort was *E. coli*. Intriguingly,  MDRO *E.coli* infection significantly impacted Chao1 richness in the high weight group while accounting for exposure to antibiotics and the impact on Shannon alpha diversity was almost significant.
+One of the most prevalent MDROs in the cohort was *E. coli*. Intriguingly, MDRO *E.coli* infection significantly impacted Chao1 richness in the high weight group while accounting for exposure to antibiotics and the impact on Shannon alpha diversity was almost significant.
 
 ```{r E.coli_alpha_highW, warning=FALSE, fig.width=8}
 

@@ -1,13 +1,32 @@
 # Gut microbiome alpha diversity decreases in relation to body weight, antibiotic exposure, and infection with multidrug-resistant organisms
+
 ### Jonathan Panzer
-### 11/2/23
 
-## Introduction {#Introduction}
+### 1/24
 
-This GMADD github repository contains all code used to process and analyze data and metadata associated with the brief report published in the journal *American Journal of Infection Control* (DOI:___). The following abstract summarizes the results of the brief report:
+## Introduction
 
-Abstract:
-16S rRNA gene sequencing of 45 fecal samples revealed that subjects with multiple multidrug-resistant organisms (MDROs), subjects weighing greater than 80kg infected with MDRO E. coli, and subjects weighing less than 80kg with exposure to vancomycin and carbapenem antibiotics during hospitalization had significantly decreased gut microbiome richness.  
+This GMADD github repository contains all code used to process and analyze data and metadata associated with the major article published in *American Journal of Infection Control* (<https://doi.org/10.1016/j.ajic.2023.12.017>). The following abstract summarizes the results:
+
+### Abstract:
+
+#### Background
+
+The human gastrointestinal tract is home to a dense and diverse microbiome, predominated by bacteria. Despite the conservation of critical functionality across most individuals, the composition of the gut microbiome is highly individualized, leading to differential responses to perturbations such as oral antibiotics or multidrug-resistant organism (MDRO) infection. Herein, subject responses to these perturbations based on their body weight were evaluated.
+
+#### Methods
+
+Fecal samples were collected from 45 subjects at the Detroit Medical Center to evaluate the effects of perturbations on subjects' gut microbiome composition. Bacterial profiling was completed using 16S rRNA gene sequencing.
+
+#### Results
+
+Subjects with multiple MDROs, subjects weighing greater than 80 kg infected with MDRO *E coli*, and subjects weighing less than 80 kg with exposure to vancomycin and carbapenem antibiotics during hospitalization had significantly decreased gut microbiome richness.
+
+#### Conclusions
+
+Both administration of oral antibiotics and MDRO infections decreased gut microbiome alpha diversity, but the magnitude of these gut microbiome perturbations was body weight dependent.
+
+### Data Availability and Replication
 
 `.fastq.gz` files associated with this study have been uploaded to the [Sequence Read Archive](https://www.ncbi.nlm.nih.gov/sra) under the BioProject number PRJNA942348 and can be accessed with accession numbers SRR23752615-SRR23752663.
 
